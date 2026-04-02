@@ -1,0 +1,37 @@
+# ============================================================
+# Source Code Knowledge Base — Configuration Example
+# ============================================================
+# Copy this file to config.yaml and adjust values as needed.
+# All URL and credential fields below are placeholders only.
+# ============================================================
+
+# Embedding model (Ollama)
+embedding:
+  model: "qwen3-embedding:latest"
+  base_url: "http://your-ollama-host:11434"
+
+# Vector store (ChromaDB)
+vectorstore:
+  type: "chromadb"
+  persist_dir: "./data/chromadb"   # Local persistence directory
+  collection: "default"            # Default collection name
+
+# LLM (OpenAI API-compatible — used by sckb query / sckb chat only)
+llm:
+  base_url: "http://your-llm-host:11434/v1"
+  model: "your-model-name"
+  api_key: "your-api-key"
+
+# Reranker (local CrossEncoder — used by sckb query / sckb chat only)
+reranker:
+  model: "BAAI/bge-reranker-v2-m3"   # HuggingFace model ID; loaded locally
+  base_url: "http://your-ollama-host:11434"
+  top_n: 5
+  mode: "local"                       # "local" = sentence-transformers CrossEncoder
+
+# Retrieval parameters
+retrieval:
+  top_k: 10             # Vector search candidate count
+  rerank_top_n: 5       # Documents retained after reranking
+  use_multiquery: true   # Expand query with LLM-generated variants
+  use_reranker: true     # Apply local CrossEncoder reranker (CLI pipeline only)

@@ -1,0 +1,20 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Config file
+config.yaml
+
+# Data (ChromaDB persistence, generated at runtime)
+data/chromadb/
+!data/chromadb/.gitkeep
+
+# Sessions
+sessions/
