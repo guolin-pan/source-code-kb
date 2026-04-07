@@ -29,14 +29,22 @@ For each item found, record:
   "symbol": "function_or_class_name",
   "description": "brief description",
   "dependencies": ["other_files_or_modules"],
+  "component": "subsystem_name",
   "api_exports": ["exported_func1", "exported_func2"],
   "api_imports": ["consumed_external_func1"],
   "messages_send": ["MSG_TYPE_A", "MSG_TYPE_B"],
-  "messages_receive": ["MSG_TYPE_C"]
+  "messages_receive": ["MSG_TYPE_C"],
+  "ipc_mechanism": ["socket", "shared_memory"],
+  "shared_data": ["global_config_table", "device_registry"],
+  "call_chains": ["main→init_subsystem→register_device"]
 }
 ```
 
-> **Note**: The `api_exports`, `api_imports`, `messages_send`, and `messages_receive` fields provide structured data that will be used in the Global Correlation Analysis phase (Phase 3.5) to deduce cross-module dependencies and end-to-end flows.
+> **Graph-Aware Scanning**: The `component`, `api_exports`, `api_imports`, `messages_send`, `messages_receive`, `ipc_mechanism`, `shared_data`, and `call_chains` fields collected during scanning serve two purposes:
+> 1. They feed directly into the Global Correlation Analysis (Phase 3.5) for cross-module dependency discovery
+> 2. They guide the Deep Analysis phase (Phase 3) to ensure graph-critical relationship data is extracted into every JSONL chunk
+>
+> **Be specific and consistent**: Use exact symbol names (not descriptions), consistent component identifiers across files, and `→` notation for call chains. Every public header function should appear in `api_exports`; every cross-module function call should appear in `api_imports`.
 
 ### Step 3: Config Index
 
@@ -90,9 +98,15 @@ Return a JSON object:
     {
       "title": "Topic Title",
       "description": "Brief description",
+      "component": "subsystem-name",
       "key_files": ["file1.c", "file2.c"],
       "config_files": ["config.json"],
-      "estimated_sections": ["Overview", "Internals", "Configuration"]
+      "estimated_sections": ["Overview", "Internals", "Configuration"],
+      "key_symbols": ["main_func", "init_func"],
+      "api_exports": ["public_api_func"],
+      "api_imports": ["external_dep_func"],
+      "ipc_mechanism": ["socket"],
+      "shared_data": ["global_table"]
     }
   ]
 }

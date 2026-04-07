@@ -76,12 +76,14 @@ Config Key: {full key path}
 
 ## Optional Sections (include when relevant)
 
-### Interface / Inter-Module (include when applicable)
-- Exported APIs (api_exports): Functions this module provides to others
-- Imported APIs (api_imports): External functions this module consumes
-- IPC mechanisms: How this module communicates with others
-- Messages: What messages this module sends/receives
-- Shared data: Global or shared data this module reads/writes
+### Interface / Inter-Module (include when applicable — CRITICAL for Graph)
+- Exported APIs (api_exports): Functions this module provides to others — list every public function with its purpose
+- Imported APIs (api_imports): External functions this module consumes — list every cross-module call
+- IPC mechanisms: How this module communicates with others (sockets, shared memory, D-Bus, message queues, etc.)
+- Messages: What messages/events this module sends and receives — use consistent names matching other modules
+- Shared data: Global or shared data structures this module reads/writes — use the actual variable/struct name
+
+> **Why this section matters for graph quality**: The knowledge graph builds cross-component edges from `api_exports`, `api_imports`, `ipc_mechanism`, `messages_send`, `messages_receive`, and `shared_data`. If this section is omitted or vague, the graph cannot link this module to its callers/callees, and queries like "What depends on this module?" will return incomplete results.
 
 ### Interface Definitions
 - Public API functions with signatures
@@ -114,3 +116,14 @@ When converting a topic document to JSONL chunks:
    - 0.3-0.5: Speculative or under-documented
 7. Include `files`, `symbols`, `language` (required) and `meta` with `config_keys` when available
 8. Each chunk's `content` must be self-contained (readable without other chunks)
+
+### Graph Field Rules (apply to EVERY chunk)
+
+9. **`component`** is REQUIRED — set it to the subsystem name for this topic (e.g., `"mm"`, `"net-driver"`, `"scheduler"`). Use the same identifier across all chunks of the same module.
+10. **`call_chains`** — extract every execution path mentioned in the content as a `→`-separated symbol chain. If the content says "A calls B then C", produce `["A→B→C"]`. Pure symbol names only, no file names or parentheses.
+11. **`api_exports`** — list every function this module provides to others (public headers, EXPORT_SYMBOL, registered callbacks). Use exact symbol names.
+12. **`api_imports`** — list every function this module calls from other modules. Use exact symbol names.
+13. **`ipc_mechanism`** — if the module uses any IPC, name the mechanism type (e.g., `"unix_socket"`, `"shared_memory"`, `"dbus"`).
+14. **`messages_send`** / **`messages_receive`** — for event-driven systems, list message/event type identifiers.
+15. **`shared_data`** — name any shared data structures, caches, or global state accessed by multiple components.
+16. **`symbols`** must list ALL function/class/macro/variable names that appear in the `content` — this powers both vector-search boosting and graph node creation.

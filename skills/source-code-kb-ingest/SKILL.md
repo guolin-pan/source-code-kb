@@ -64,6 +64,24 @@ Every record must have these required fields:
 
 Optional fields: `id`, `component`, `call_chains`, `api_exports`, `api_imports`, `ipc_mechanism`, `messages_send`, `messages_receive`, `shared_data`, `meta`.
 
+### Graph-Critical Fields
+
+The following fields are used to build an entity-relationship graph for cross-component retrieval. **They are strongly recommended whenever the information exists in the source data** — omitting them degrades graph-based recall:
+
+| Field | Graph Usage |
+|-------|-------------|
+| `component` | Anchors all relationships to a subsystem — **always set this** |
+| `call_chains` | Creates CALLS edges between symbols (e.g., `["A→B→C"]`) |
+| `api_exports` | Creates EXPORTS_API edges (component provides these APIs) |
+| `api_imports` | Creates IMPORTS_API edges (component consumes these APIs) |
+| `ipc_mechanism` | Creates IPC channel nodes and edges |
+| `messages_send` / `messages_receive` | Creates message-passing edges between components |
+| `shared_data` | Creates shared data structure nodes and access edges |
+
+The ingest pipeline handles both vector indexing and graph construction in a single pass — no separate graph-import step is needed.
+
+> **Entity matching at recall time**: During retrieval, an LLM infers probable code entities (symbols, files, components) from the user's question and matches them against graph nodes built from these fields. Use exact code identifiers — not descriptions — so that graph nodes can be resolved. For example, `"symbols": ["udrv_bus_add_device"]` not `"symbols": ["bus add function"]`.
+
 ## Validation
 
 Records are validated client-side before sending to the API:
@@ -82,6 +100,6 @@ Invalid records are skipped with error messages. Only valid records are sent to 
 
 ## When to Use
 
-- Ingesting knowledge extracted by `source-code-kb-analyzer` into the vector store
+- Ingesting knowledge extracted by `source-code-kb-analyzer` into the vector store and knowledge graph
 - Loading pre-prepared JSONL knowledge files into the KB
 - Batch-loading knowledge from multiple projects

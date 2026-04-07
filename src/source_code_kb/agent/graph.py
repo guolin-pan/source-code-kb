@@ -16,7 +16,7 @@ The Agent automatically selects the path based on query classification, with no 
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generator
+from typing import TYPE_CHECKING, Any, Generator
 
 from langgraph.graph import END, START, StateGraph
 
@@ -36,7 +36,6 @@ from source_code_kb.agent.state import AgentState
 
 if TYPE_CHECKING:
     from source_code_kb.config import AppConfig
-    from source_code_kb.retrieval.retriever import HybridRetriever
 
 
 def _route_by_query_type(state: AgentState) -> str:
@@ -68,7 +67,7 @@ def _route_by_query_type(state: AgentState) -> str:
 
 def build_agent_graph(
     config: AppConfig,
-    retriever: HybridRetriever,
+    retriever: Any,
     on_token: callable | None = None,
 ) -> StateGraph:
     """Build the LangGraph Agent workflow graph.
@@ -171,7 +170,7 @@ def build_agent_graph(
     return graph
 
 
-def create_agent(config: AppConfig, retriever: HybridRetriever, on_token=None):
+def create_agent(config: AppConfig, retriever: Any, on_token=None):
     """Create a compiled LangGraph Agent.
 
     Args:
@@ -193,7 +192,7 @@ def create_agent(config: AppConfig, retriever: HybridRetriever, on_token=None):
 def run_agent(
     question: str,
     config: AppConfig,
-    retriever: HybridRetriever,
+    retriever: Any,
 ) -> dict:
     """Run the Agent to process a question and return the result.
 
@@ -244,7 +243,7 @@ def run_agent(
 def run_agent_stream(
     question: str,
     config: AppConfig,
-    retriever: HybridRetriever,
+    retriever: Any,
     on_token: callable | None = None,
 ) -> Generator[tuple[str, dict], None, None]:
     """Run the Agent in streaming mode, yielding node-level progress.

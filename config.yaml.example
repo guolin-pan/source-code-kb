@@ -35,3 +35,10 @@ retrieval:
   rerank_top_n: 5       # Documents retained after reranking
   use_multiquery: true   # Expand query with LLM-generated variants
   use_reranker: true     # Apply local CrossEncoder reranker (CLI pipeline only)
+
+# Knowledge graph — enhances cross-component recall
+graph:
+  persist_dir: "./data/graph"     # Directory for graph persistence (pickle)
+  max_hops: 2                     # BFS traversal depth for graph queries
+  fusion_alpha: 0.6               # Vector weight in RRF (graph weight = 1 - alpha)
+  rrf_k: 60                       # RRF constant k

@@ -11,6 +11,7 @@ All prompts are written in English.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from langchain_core.output_parsers import StrOutputParser
@@ -165,30 +166,103 @@ def generate_multi_angle_queries(query: str, config: AppConfig) -> list[str]:
     Returns:
         A list of 3-5 English retrieval queries.
     """
-    # Deferred import: MULTI_ANGLE_QUERY_PROMPT lives in the generation
-    # package.  This is the "R2" feature in the retrieval pipeline — it
-    # generates 4-6 queries from distinct angles to maximise recall:
-    #   1. Original keywords — direct English translation of user terms
-    #   2. Function / symbol names — inferred identifiers
-    #   3. File paths — likely source file locations
-    #   4. Call chains / data flow — execution or data flow descriptions
-    #   5. Component / subsystem — broader architectural context
-    #   6. Tags and domain — classification tags and domain identifiers
-    # All generated queries are forced to English regardless of the user's
-    # input language, because the indexed code chunks and their embeddings
-    # are in English.
     from source_code_kb.generation.prompts import MULTI_ANGLE_QUERY_PROMPT
 
     llm = create_llm(config)
-    # Same LCEL chain pattern as the other query generation functions.
     chain = MULTI_ANGLE_QUERY_PROMPT | llm | StrOutputParser()
     result = chain.invoke({"query": query})
 
-    # Parse: one query per line, discard blank lines.
     queries = [line.strip() for line in result.strip().split("\n") if line.strip()]
-    # Fallback: if the LLM returns empty output (e.g. due to a timeout or
-    # content filter), use the original query as-is so that retrieval can
-    # still proceed with at least one query.
     if not queries:
         queries = [query]
     return queries
+
+
+# ── Entity-typed result from multi-angle query generation ──────
+
+
+@dataclass
+class RewriteResult:
+    """Result of ``generate_multi_angle_queries_with_entities``.
+
+    Attributes:
+        queries: Multi-angle English retrieval queries.
+        symbols: Code symbols (functions, classes, macros, structs) inferred by LLM.
+        files: Likely source file paths inferred by LLM.
+        components: Component/subsystem names inferred by LLM.
+    """
+
+    queries: list[str]
+    symbols: list[str]
+    files: list[str]
+    components: list[str]
+
+
+def generate_multi_angle_queries_with_entities(
+    query: str,
+    config: AppConfig,
+) -> RewriteResult:
+    """Generate multi-angle queries **and** extract code entities in one LLM call.
+
+    The LLM returns a JSON object with ``queries`` and ``entities`` keys.
+    Entities are used downstream by the :class:`GraphRetriever` for
+    knowledge-graph traversal, dramatically improving graph hit rates for
+    natural-language questions that don't contain literal symbol names.
+
+    Falls back to :func:`generate_multi_angle_queries` (plain text mode)
+    when the LLM response is not valid JSON.
+    """
+    import json
+
+    from source_code_kb.generation.prompts import MULTI_ANGLE_QUERY_WITH_ENTITIES_PROMPT
+
+    llm = create_llm(config)
+    chain = MULTI_ANGLE_QUERY_WITH_ENTITIES_PROMPT | llm | StrOutputParser()
+    raw = chain.invoke({"query": query})
+
+    # Attempt to parse structured JSON output.
+    try:
+        # Strip markdown code fences if the LLM wraps its output.
+        text = raw.strip()
+        if text.startswith("```"):
+            # Remove leading ```json and trailing ```
+            lines = text.split("\n")
+            text = "\n".join(
+                l for l in lines if not l.strip().startswith("```")
+            )
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        # Fallback: treat LLM output as plain-text queries (no entities).
+        queries = [l.strip() for l in raw.strip().split("\n") if l.strip()]
+        if not queries:
+            queries = [query]
+        return RewriteResult(queries=queries, symbols=[], files=[], components=[])
+
+    # Parse queries.
+    queries = data.get("queries", [])
+    if not isinstance(queries, list) or not queries:
+        queries = [query]
+
+    # Parse entities — defensive: each field may be missing or wrong type.
+    entities = data.get("entities", {})
+    if not isinstance(entities, dict):
+        entities = {}
+    symbols = _ensure_str_list(entities.get("symbols", []))
+    files = _ensure_str_list(entities.get("files", []))
+    components = _ensure_str_list(entities.get("components", []))
+
+    return RewriteResult(
+        queries=queries,
+        symbols=symbols,
+        files=files,
+        components=components,
+    )
+
+
+def _ensure_str_list(val: object) -> list[str]:
+    """Coerce *val* to a list[str], handling unexpected LLM output types."""
+    if isinstance(val, list):
+        return [str(v) for v in val if v]
+    if isinstance(val, str):
+        return [val] if val else []
+    return []

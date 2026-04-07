@@ -107,18 +107,25 @@ Every JSONL chunk must have these 13 required fields + optional fields:
 | symbols | list[string] | Key symbols: function names, class names, macros, global variables (REQUIRED) |
 | language | string | Programming language (REQUIRED) |
 
-#### Optional First-Class Fields
+#### Graph-Critical Fields (Required When Applicable)
+
+These fields are consumed by the knowledge graph to build entity-relationship graphs for cross-component retrieval. **If the information exists in the source code, the field MUST be populated** — omitting available data degrades graph-based recall.
+
+| Field | Type | Graph Usage | When to Populate |
+|-------|------|-------------|-----------------|
+| component | string | Creates Component nodes; anchors all relationships | Always — every chunk belongs to a component/subsystem |
+| call_chains | list[string] | Creates CALLS edges between Symbol nodes (`A→B→C` becomes A→B, B→C) | Whenever the chunk describes execution flow or function invocations |
+| api_exports | list[string] | Creates EXPORTS_API edges (Component → Symbol) | Whenever the module provides public APIs callable by other modules |
+| api_imports | list[string] | Creates IMPORTS_API edges (Component → Symbol) | Whenever the module calls external APIs from other modules |
+| ipc_mechanism | list[string] | Creates IPC_CHANNEL nodes + IPC_SENDS edges | Whenever the module uses IPC (sockets, shared memory, D-Bus, message queues, etc.) |
+| messages_send | list[string] | Creates IPC_CHANNEL nodes + IPC_SENDS edges | Whenever the module emits messages/events |
+| messages_receive | list[string] | Creates IPC_CHANNEL nodes + IPC_RECEIVES edges | Whenever the module listens for messages/events |
+| shared_data | list[string] | Creates DATA_STRUCTURE nodes + SHARES_DATA edges | Whenever the module reads/writes shared global data structures, databases, or shared memory regions |
+
+#### Optional Extension Field
 
 | Field | Type | Description |
 |-------|------|-------------|
-| component | string | Component/subsystem name |
-| call_chains | list[string] | Call chains (e.g., `["main→init→setup"]`) |
-| api_exports | list[string] | Exported/public APIs |
-| api_imports | list[string] | Consumed external APIs |
-| ipc_mechanism | list[string] | IPC mechanisms used |
-| messages_send | list[string] | Messages sent |
-| messages_receive | list[string] | Messages received |
-| shared_data | list[string] | Shared data read/written |
 | meta | object | Extension pocket field, stored as JSON string |
 
 ### meta Field for Code Analysis
@@ -127,6 +134,35 @@ The `meta` field is for extension data only. Recommended sub-fields in `meta`:
 - `config_keys`: config keys involved
 - `variants`: board-specific variations
 - `cross_refs`: cross-project references
+
+### Graph Data Quality Rules (MANDATORY)
+
+The JSONL output is consumed by two systems simultaneously:
+1. **Vector store** (ChromaDB) — uses `content` for embedding; `symbols`, `files`, `call_chains` are appended to the embedding text for better semantic matching
+2. **Knowledge graph** (NetworkX) — uses `component`, `call_chains`, `api_exports`, `api_imports`, `ipc_mechanism`, `messages_send`, `messages_receive`, `shared_data` to build a traversable entity-relationship graph
+
+Both systems are served by a single JSONL output. The LLM must produce graph-ready data in the same pass as writing the content — **there is no separate graph extraction step**.
+
+#### Why graph field quality matters for recall
+
+At retrieval time, an LLM Rewrite step infers probable code entities (symbols, files, components) from the user's natural-language question. These inferred entities are matched against graph nodes built from JSONL fields. If the analyzer produces vague or incomplete `symbols`, `component`, or `files` fields, **the graph nodes will not match the entities the recall LLM infers**, and graph retrieval will fail silently — returning 0 graph hits even though relevant chunks exist.
+
+**Example**: If a chunk describes `udrv_bus_add_device` but `symbols` only lists `["bus add"]`, the recall LLM will infer `udrv_bus_add_device` → no match in the graph. The `symbols` field must contain the exact identifier: `["udrv_bus_add_device"]`.
+
+#### Graph Quality Checklist (verify for every chunk)
+
+| # | Check | Violation Example | Correct Example |
+|---|-------|-------------------|-----------------|
+| 1 | **`component` is always set** | `"component": ""` or missing | `"component": "net-driver"` |
+| 2 | **`call_chains` use `→` arrow notation with symbol names only** — no file names, no parentheses | `"main.c→init()"` | `"main→init_subsystem→register_device"` |
+| 3 | **`call_chains` list every distinct execution path mentioned in `content`** | Content says "A calls B which calls C" but call_chains is empty | `"call_chains": ["A→B→C"]` |
+| 4 | **`api_exports` lists symbol names, not descriptions** | `"api_exports": ["the register function"]` | `"api_exports": ["platform_driver_register"]` |
+| 5 | **`api_imports` lists the actual external symbol called** | `"api_imports": ["some memory function"]` | `"api_imports": ["kmalloc", "kfree"]` |
+| 6 | **`shared_data` names the data structure, not a description** | `"shared_data": ["the global config"]` | `"shared_data": ["g_device_table", "route_cache"]` |
+| 7 | **`ipc_mechanism` names the mechanism type** | `"ipc_mechanism": ["communication"]` | `"ipc_mechanism": ["unix_socket", "dbus", "shared_memory"]` |
+| 8 | **`symbols` includes ALL function/class/macro names mentioned in content** | Content mentions `do_fork` but symbols omits it | `"symbols": ["do_fork", "copy_process", "wake_up_new_task"]` |
+| 9 | **Cross-module calls appear in BOTH the caller's `api_imports` AND the callee's `api_exports`** | Module A calls `register_driver` from module B, but only A has it in `api_imports` | Module A: `"api_imports": ["register_driver"]`; Module B: `"api_exports": ["register_driver"]` |
+| 10 | **Every `messages_send` entry in one chunk has a matching `messages_receive` in another chunk** (when the receiver is also analyzed) | Module A sends `EVENT_READY` but no chunk declares receiving it | Chunk A: `"messages_send": ["EVENT_READY"]`; Chunk B: `"messages_receive": ["EVENT_READY"]` |
 
 ### Content Writing Convention (MANDATORY — EVERY RULE MUST BE FOLLOWED — EVERY CHUNK MUST SHOW EVIDENCE OF COMPLIANCE)
 

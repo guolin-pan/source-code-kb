@@ -112,6 +112,11 @@ def _extract_code_entities(query: str) -> tuple[list[str], list[str]]:
     return symbols, files
 
 
+# Public alias so other modules (e.g. graph.retriever) can import
+# the entity extractor without relying on a private name.
+extract_code_entities = _extract_code_entities
+
+
 # ── ChromaDB filter construction ──────────────────────────────────
 
 
@@ -277,6 +282,7 @@ class HybridRetriever:
         query: str,
         top_k: int | None = None,
         search_filter: SearchFilter | None = None,
+        entities: dict[str, list[str]] | None = None,
     ) -> list[SearchResult]:
         """Perform hybrid search: vector similarity + metadata filtering + symbol matching.
 
@@ -288,6 +294,8 @@ class HybridRetriever:
             query: User query text.
             top_k: Number of results to return.
             search_filter: Metadata filter conditions.
+            entities: Pre-extracted code entities (unused by HybridRetriever,
+                      accepted for interface compatibility with HybridFusionRetriever).
 
         Returns:
             A list of SearchResult objects sorted by relevance.

@@ -210,6 +210,36 @@ def validate_quality(record: dict) -> list[str]:
         if not has_marker:
             warnings.append("quality: confidence < 0.6 but content missing risk marker (risk/unverified/speculative/uncertain/inferred)")
 
+    # ── Graph data completeness checks ──
+    # These are quality warnings (not schema errors) to encourage graph-ready output.
+
+    # component should always be set for graph anchoring
+    component = record.get("component")
+    if not component or (isinstance(component, str) and not component.strip()):
+        warnings.append("graph: 'component' is empty — graph relationships will be unanchored")
+
+    # call_chains should be populated when content describes execution flow
+    call_chains = record.get("call_chains")
+    content_lower = content.lower()
+    flow_indicators = ("calls", "invokes", "triggers", "→", "->", "then calls", "which calls")
+    has_flow_language = any(ind in content_lower for ind in flow_indicators)
+    if has_flow_language and (not call_chains or call_chains == []):
+        warnings.append("graph: content describes execution flow but 'call_chains' is empty")
+
+    # symbols should include all function names mentioned in content
+    symbols = record.get("symbols") or []
+    if isinstance(symbols, list) and len(symbols) == 0:
+        # symbols is a required field, but this is a graph-quality reminder
+        warnings.append("graph: 'symbols' is empty — no graph nodes will be created from this chunk")
+
+    # api_exports / api_imports should be populated for module-interface domain
+    domain = record.get("domain", "")
+    if domain == "module-interface":
+        api_exports = record.get("api_exports") or []
+        api_imports = record.get("api_imports") or []
+        if not api_exports and not api_imports:
+            warnings.append("graph: domain is 'module-interface' but both 'api_exports' and 'api_imports' are empty")
+
     return warnings
 
 

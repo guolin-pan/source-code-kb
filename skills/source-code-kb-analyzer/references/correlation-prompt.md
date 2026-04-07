@@ -44,6 +44,22 @@ Generate JSONL chunks with:
 - Include all relevant files, symbols from participating modules
 - call_chains should show the full cross-module chain
 
+### Graph Field Requirements for Correlation Chunks
+
+Correlation chunks are the **most important source of cross-module graph edges**. The knowledge graph relies on these chunks to connect components that were analyzed independently in Phase 3.
+
+| Field                                | Requirement for Correlation Chunks                                                                                                                                                                       |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `component`                          | Set to the primary subsystem of the flow entry point, or use a synthetic name like `"cross-module"` for flows spanning many subsystems                                                                   |
+| `call_chains`                        | **MUST contain the full cross-module call chain** using `→` notation. This is the primary source of cross-component CALLS edges in the graph. E.g., `["netif_receive_skb→ip_rcv→fib_lookup→tcp_v4_rcv"]` |
+| `api_exports`                        | List symbols that are entry points *into* a module from the perspective of this flow                                                                                                                     |
+| `api_imports`                        | List symbols that this flow *calls into* other modules — this creates cross-module IMPORTS_API edges                                                                                                     |
+| `ipc_mechanism`                      | If the cross-module communication uses IPC instead of direct function calls, name the mechanism                                                                                                          |
+| `messages_send` / `messages_receive` | For async flows, list the message types that bridge modules                                                                                                                                              |
+| `shared_data`                        | If modules interact through shared data structures, name them                                                                                                                                            |
+| `symbols`                            | **Must include ALL symbols from ALL participating modules** mentioned in the content                                                                                                                     |
+| `files`                              | **Must include files from ALL participating modules**                                                                                                                                                    |
+
 ### Example JSONL chunk (end-to-end-flow):
 ```json
 {
@@ -58,12 +74,16 @@ Generate JSONL chunks with:
   "source": "correlation-analysis",
   "updated_at": "2025-01-01T00:00:00Z",
   "files": ["net/core/dev.c", "net/ipv4/ip_input.c", "net/ipv4/tcp_ipv4.c"],
-  "symbols": ["netif_receive_skb", "ip_rcv", "fib_lookup", "tcp_v4_rcv"],
+  "symbols": ["netif_receive_skb", "ip_rcv", "ip_rcv_finish", "fib_lookup", "tcp_v4_rcv"],
   "language": "c",
   "component": "net",
   "call_chains": ["netif_receive_skb→ip_rcv→ip_rcv_finish→fib_lookup→tcp_v4_rcv"],
-  "api_exports": [],
-  "api_imports": ["netif_receive_skb", "tcp_v4_rcv"],
+  "api_exports": ["netif_receive_skb"],
+  "api_imports": ["tcp_v4_rcv"],
+  "ipc_mechanism": [],
+  "messages_send": [],
+  "messages_receive": [],
+  "shared_data": ["sk_buff"],
   "meta": {}
 }
 ```

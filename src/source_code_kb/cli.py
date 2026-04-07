@@ -196,12 +196,13 @@ def query(
     # Lazy imports for the vector store and retriever — kept out of module
     # scope so that commands that do not need them (e.g. `serve`) start fast.
     from source_code_kb.ingest.indexer import create_vectorstore
-    from source_code_kb.retrieval.retriever import HybridRetriever
+    from source_code_kb.retrieval.factory import create_retriever
 
-    # Obtain the ChromaDB collection handle and wrap it in a HybridRetriever
-    # which provides both dense (vector) and optional sparse (keyword) search.
+    # Obtain the ChromaDB collection handle and wrap it in a retriever.
+    # create_retriever returns a HybridFusionRetriever (vector + graph RRF)
+    # when a persisted graph exists, otherwise a plain HybridRetriever.
     coll_obj = create_vectorstore(cfg, collection_name=collection)
-    retriever = HybridRetriever(coll_obj, cfg)
+    retriever = create_retriever(coll_obj, cfg)
 
     try:
         # ── Mode dispatch ──
@@ -313,13 +314,21 @@ def chat(
     # retriever which are only needed for this command.
     from source_code_kb.chat.session import ChatSession
     from source_code_kb.ingest.indexer import create_vectorstore
-    from source_code_kb.retrieval.retriever import HybridRetriever, SearchFilter
+    from source_code_kb.retrieval.factory import create_retriever
+    from source_code_kb.retrieval.retriever import SearchFilter
 
     # Initialise the ChromaDB collection, wrap it in a retriever, and create
     # a ChatSession that tracks conversation history, mode, and filters.
     coll_obj = create_vectorstore(cfg, collection_name=collection)
-    retriever = HybridRetriever(coll_obj, cfg)
+    retriever = create_retriever(coll_obj, cfg)
     session = ChatSession(mode=mode)
+
+    # Pre-load the reranker model at startup (outside the Rich Status spinner)
+    # so that the first query doesn't stall inside a spinner context while
+    # downloading / loading a ~400 MB CrossEncoder.
+    if cfg.retrieval.use_reranker and cfg.reranker.mode == "local":
+        from source_code_kb.retrieval.reranker import _get_cross_encoder
+        _get_cross_encoder(cfg.reranker.model)
 
     console.print()
     console.print(_build_welcome_banner(collection, session.mode, cfg.llm.model))
@@ -408,6 +417,66 @@ def chat(
             console.print("[dim]  Check LLM service config (llm.base_url in config.yaml).[/dim]\n")
 
 
+# ── Graph contribution report helper ────────────────────────────
+
+
+def _format_graph_report(stats: dict) -> list[str]:
+    """Build Rich-formatted lines summarising graph contribution to retrieval.
+
+    Returns a list of console.print-ready strings.  Returns an empty list
+    when there is nothing meaningful to report.
+    """
+    lines: list[str] = []
+    if not stats:
+        return lines
+
+    v_hits = stats.get("vector_hits", 0)
+    g_raw = stats.get("graph_hits_raw", 0)
+    g_filt = stats.get("graph_hits_filtered", 0)
+    merged = stats.get("merged_total", 0)
+    g_only = stats.get("graph_only", 0)
+    g_boost = stats.get("graph_boosted", 0)
+    g_total = g_only + g_boost
+    rank_imps = stats.get("rank_improvements", [])
+
+    if g_raw == 0 and g_total == 0:
+        lines.append("[step]  ✓ Graph[/step]  [dim]no graph hits[/dim]")
+        return lines
+
+    # ── Header: overview numbers ──
+    pct = round(g_total / merged * 100) if merged else 0
+    header_parts = [f"[cyan]{g_total}[/cyan]/{merged} results graph-enhanced ({pct}%)"]
+    if g_only:
+        header_parts.append(f"[cyan]{g_only}[/cyan] new docs")
+    if g_boost:
+        header_parts.append(f"[cyan]{g_boost}[/cyan] rank-boosted")
+    lines.append(f"[step]  ✓ Graph[/step]  {', '.join(header_parts)}")
+
+    # ── Traversal stats ──
+    trav_parts = [f"traversed [cyan]{g_raw}[/cyan]"]
+    if g_raw != g_filt:
+        trav_parts.append(f"filtered → [cyan]{g_filt}[/cyan]")
+    trav_parts.append(f"vector [cyan]{v_hits}[/cyan]")
+    lines.append(f"[dim]           Sources: {' │ '.join(trav_parts)}[/dim]")
+
+    # ── Rank changes (up to 5 most notable) ──
+    if rank_imps:
+        lines.append("[dim]           Rank changes:[/dim]")
+        for imp in rank_imps[:5]:
+            topic = imp.get("topic", "?")
+            change = imp["change"]
+            if change == "new":
+                lines.append(f"[dim]             [green]+ NEW[/green]  {topic}[/dim]")
+            else:
+                v_rank = imp["vector_rank"]
+                f_rank = imp["fused_rank"]
+                lines.append(f"[dim]             [green]{change}[/green]  {topic}  (rank {v_rank} → {f_rank})[/dim]")
+        if len(rank_imps) > 5:
+            lines.append(f"[dim]             … and {len(rank_imps) - 5} more[/dim]")
+
+    return lines
+
+
 def _chat_simple_mode(
     user_input: str,
     cfg,
@@ -425,7 +494,7 @@ def _chat_simple_mode(
         evaluate_chunks,
         generate_answer_stream,
     )
-    from source_code_kb.retrieval.query_rewriter import generate_multi_angle_queries
+    from source_code_kb.retrieval.query_rewriter import generate_multi_angle_queries_with_entities
     from source_code_kb.retrieval.retriever import SearchFilter
 
     t0 = time.time()  # Wall-clock timer for the full pipeline
@@ -474,9 +543,15 @@ def _chat_simple_mode(
             # The rewriter produces several search queries that approach the
             # topic from different angles (e.g. synonyms, related concepts)
             # to maximise recall in the vector store.
-            with Status("[dim]Generating queries…[/dim]", console=console, spinner="dots"):
+            with Status("[dim]Generating queries + extracting entities…[/dim]", console=console, spinner="dots"):
                 t_query = time.time()
-                queries = generate_multi_angle_queries(user_input, cfg)
+                rewrite_result = generate_multi_angle_queries_with_entities(user_input, cfg)
+                queries = rewrite_result.queries
+                entities = {
+                    "symbols": rewrite_result.symbols,
+                    "files": rewrite_result.files,
+                    "components": rewrite_result.components,
+                }
                 elapsed_q = time.time() - t_query
             all_used_queries.extend(queries)
             q_preview = "  │  ".join(queries[:3])
@@ -484,6 +559,16 @@ def _chat_simple_mode(
                 f"[step]  ✓ Rewrite[/step] [dim](round {round_num}, {elapsed_q:.1f}s)[/dim]  "
                 f"[cyan]{len(queries)}[/cyan] [dim]queries →[/dim] [info]{q_preview}[/info]"
             )
+            # Show extracted entities hint when any were found.
+            entity_parts = []
+            if rewrite_result.symbols:
+                entity_parts.append(f"symbols: {', '.join(rewrite_result.symbols[:5])}")
+            if rewrite_result.files:
+                entity_parts.append(f"files: {', '.join(rewrite_result.files[:3])}")
+            if rewrite_result.components:
+                entity_parts.append(f"components: {', '.join(rewrite_result.components[:3])}")
+            if entity_parts:
+                console.print(f"[dim]           Entities: {' │ '.join(entity_parts)}[/dim]")
 
             # ── Retrieve + dedup by doc_id across multiple queries ──
             # Each query may return overlapping chunks; we track seen doc_ids
@@ -494,7 +579,7 @@ def _chat_simple_mode(
                 seen_ids: set[str] = set()
                 round_results = []
                 for q in queries:
-                    hits = retriever.search(q, search_filter=search_filter)
+                    hits = retriever.search(q, search_filter=search_filter, entities=entities)
                     for r in hits:
                         doc_id = r.metadata.get("id", r.content[:50])
                         if doc_id not in seen_ids:
@@ -515,6 +600,14 @@ def _chat_simple_mode(
                 f"[step]  ✓ Retrieve[/step] [dim]({elapsed_r:.1f}s)[/dim]  "
                 f"[cyan]{len(round_results)}[/cyan] [dim]chunks  │  Topics:[/dim] [info]{topic_summary}[/info]"
             )
+
+            # ── Graph contribution report ──
+            # When using the fusion retriever (vector + graph), show a
+            # detailed report of the graph's contribution to retrieval.
+            _stats = getattr(retriever, "last_search_stats", None)
+            if _stats is not None:
+                for line in _format_graph_report(_stats):
+                    console.print(line)
 
             # ── Optional reranking ──
             # When enabled, a cross-encoder model (e.g. bge-reranker) scores

@@ -5,6 +5,7 @@ Core responsibilities:
 2. Manage the ChromaDB persistent vector store (create/open collections)
 3. Batch-ingest documents (automatic deduplication)
 4. Provide collection statistics and management functions
+5. Build and persist a knowledge graph from chunk metadata
 """
 
 from __future__ import annotations
@@ -240,7 +241,58 @@ def ingest_documents(
         f"[green]✓ Indexed {len(new_docs)} new documents[/green] "
         f"(skipped {len(documents) - len(new_docs)} duplicates)"
     )
+
+    # --- Knowledge-graph construction ---
+    # Build a graph from the *original* (unflattened) chunk metadata and
+    # persist it alongside the vector store.  The graph is additive: we only
+    # process the newly ingested documents so repeated ingest runs
+    # incrementally extend the graph.
+    _build_graph(config, new_docs)
+
     return len(new_docs)
+
+
+# ── Knowledge-graph helpers ──────────────────────────────────────────
+
+
+def _build_graph(config: AppConfig, documents: list[Document]) -> None:
+    """Build / extend the knowledge graph from newly ingested documents."""
+    graph_cfg = getattr(config, "graph", None)
+    if graph_cfg is None:
+        return
+
+    from source_code_kb.graph.builder import KnowledgeGraphBuilder
+    from source_code_kb.graph.store import GraphStore
+
+    store = GraphStore(graph_cfg.persist_dir)
+    builder = KnowledgeGraphBuilder()
+
+    # If a graph already exists on disk, load it so the builder can extend it.
+    if store.exists():
+        builder._graph = store.load()
+
+    # Convert Document objects to plain dicts expected by the builder.
+    chunks = [doc.metadata for doc in documents]
+    graph = builder.build_from_chunks(chunks)
+    store.save(graph)
+    console.print(
+        f"[green]✓ Knowledge graph updated[/green] "
+        f"({graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges)"
+    )
+
+
+def load_graph(config: AppConfig) -> "nx.DiGraph | None":
+    """Load the persisted knowledge graph (returns None when missing)."""
+    graph_cfg = getattr(config, "graph", None)
+    if graph_cfg is None:
+        return None
+
+    from source_code_kb.graph.store import GraphStore
+
+    store = GraphStore(graph_cfg.persist_dir)
+    if store.exists():
+        return store.load()
+    return None
 
 
 # ── Collection management functions ──────────────────────────────────

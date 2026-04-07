@@ -49,6 +49,11 @@ class AgentState(TypedDict):
     # Multiple query variants improve recall by searching from different angles.
     rewritten_queries: list[str]
 
+    # Code entities extracted by the LLM during the rewrite step (symbols,
+    # files, components).  Passed to the graph retriever to improve graph
+    # hit rates for natural-language questions.
+    extracted_entities: dict[str, list[str]]
+
     # Retrieved document chunks stored as plain dicts (serializable).
     # Nodes convert these to/from SearchResult objects as needed.
     retrieved_chunks: list[dict[str, Any]]

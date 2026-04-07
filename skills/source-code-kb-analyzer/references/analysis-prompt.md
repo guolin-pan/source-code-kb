@@ -76,6 +76,10 @@ For each section of the document, generate a JSONL chunk:
   "call_chains": ["start_kernel→setup_arch→mm_init"],
   "api_exports": ["start_kernel", "setup_arch"],
   "api_imports": ["mm_init"],
+  "ipc_mechanism": [],
+  "messages_send": [],
+  "messages_receive": [],
+  "shared_data": [],
   "meta": {
     "config_keys": ["CONFIG_SMP"],
     "variants": {"x86_64": "y"},
@@ -83,6 +87,27 @@ For each section of the document, generate a JSONL chunk:
   }
 }
 ```
+
+> **IMPORTANT — Dual-Purpose Output**: Each JSONL chunk serves two systems simultaneously:
+> 1. **Vector store**: The `content` field is embedded for semantic search. `symbols`, `files`, and `call_chains` are appended to the embedding text to improve code-query matching.
+> 2. **Knowledge graph**: The fields `component`, `call_chains`, `api_exports`, `api_imports`, `ipc_mechanism`, `messages_send`, `messages_receive`, and `shared_data` are parsed to build an entity-relationship graph. The graph enables multi-hop traversal queries like "What depends on module X?" or "Trace the call path from A to B across modules."
+>
+> **You must populate both groups in a single pass.** There is no separate graph-extraction step — if graph fields are empty despite the content describing relationships, graph-based recall will fail for those relationships.
+
+#### Graph Field Extraction Rules
+
+When writing each JSONL chunk, follow these rules to ensure the knowledge graph is fully populated:
+
+| Rule                                                       | Instruction                                                                                                                                                                                                                         |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Always set `component`**                                 | Every chunk must have a non-empty `component` value identifying the subsystem (e.g., `"mm"`, `"net-driver"`, `"scheduler"`). This is the anchor for all graph relationships.                                                        |
+| **Extract `call_chains` from every execution path**        | If the content describes "A calls B which calls C", produce `"call_chains": ["A→B→C"]`. Use pure symbol names — no file names, no parentheses, no line numbers. Use `→` (Unicode arrow) as separator.                               |
+| **Extract `api_exports` for public/exported interfaces**   | If this module defines functions callable by other modules (declared in public headers, exported via EXPORT_SYMBOL, registered as callbacks), list them in `api_exports`.                                                           |
+| **Extract `api_imports` for consumed external interfaces** | If this module calls functions defined in OTHER modules, list those symbols in `api_imports`. This creates cross-component edges in the graph.                                                                                      |
+| **Extract `ipc_mechanism` for communication patterns**     | If the module uses sockets, shared memory, D-Bus, message queues, pipes, RPC, or any IPC, name the mechanism.                                                                                                                       |
+| **Extract `messages_send` / `messages_receive`**           | For event-driven or message-passing systems, list the message types or event names. Ensure every `messages_send` in one chunk has a corresponding `messages_receive` in another chunk (when both sender and receiver are analyzed). |
+| **Extract `shared_data` for shared state**                 | If the module reads/writes global data structures, shared memory regions, databases, or caches used by multiple components, name them.                                                                                              |
+| **`symbols` must be exhaustive**                           | Every function, class, macro, or global variable name mentioned in the `content` should appear in `symbols`. This is critical for both vector-search boosting and graph node creation.                                              |
 
 #### Domain Selection Guide
 
@@ -97,12 +122,19 @@ Choose the `domain` value based on the chunk's focus:
 | `data-model`         | Data structures, database schemas, serialization formats, shared data definitions        |
 | `build-deploy`       | Build system, compilation, linking, deployment, packaging                                |
 
-#### Extracting Interface Information
+#### Extracting Interface Information (MANDATORY for Graph)
 
-When analyzing source code, actively extract:
-- **api_exports**: Functions declared in public headers, exported symbols, service endpoints that other modules can call
-- **api_imports**: External functions this module calls, library dependencies, service clients
-- **ipc_mechanism**: Communication patterns such as sockets, shared memory, message queues, RPC, D-Bus, pipes
+When analyzing source code, **actively extract the following for every chunk** — these fields directly feed the knowledge graph:
+
+- **component**: Identify which subsystem/module this code belongs to. Use a short, consistent identifier (e.g., `"mm"`, `"net-core"`, `"scheduler"`). The same component name must be used across all chunks describing the same subsystem.
+- **api_exports**: Functions declared in public headers, exported symbols (`EXPORT_SYMBOL`), service endpoints, callback registrations that other modules can call. Use the exact symbol name.
+- **api_imports**: External functions this module calls from other subsystems, library dependencies, service clients. Use the exact symbol name, not descriptions.
+- **ipc_mechanism**: Communication patterns such as sockets, shared memory, message queues, RPC, D-Bus, pipes, signals. Name the specific mechanism.
+- **messages_send** / **messages_receive**: Message types, event names, signal identifiers. Be consistent with naming across sender and receiver chunks.
+- **shared_data**: Named global data structures, shared caches, databases, shared memory regions. Use the variable/structure name, not a description.
+- **call_chains**: Every execution path described in the content must be captured as a call chain string using `→` notation (e.g., `"init→setup_device→register_irq"`). Pure symbol names only.
+
+> **Why this matters**: The knowledge graph builds typed edges from these fields. Missing `api_exports` means the graph cannot link callers to callees across modules. Missing `component` means symbols float unanchored. Missing `call_chains` means multi-hop traversal ("trace the boot sequence from start to device probing") returns nothing.
 
 ### Analysis Rules
 

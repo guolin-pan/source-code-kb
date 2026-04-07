@@ -141,6 +141,24 @@ class RetrievalConfig:
 
 
 @dataclass
+class GraphConfig:
+    """Knowledge-graph configuration.
+
+    Attributes:
+        persist_dir: Directory for graph persistence (pickle).
+        max_hops: Maximum BFS traversal depth for graph retrieval.
+        fusion_alpha: Weight for vector results in RRF (0-1).
+                      Graph weight = 1 - fusion_alpha.
+        rrf_k: Constant *k* in the RRF formula (typically 60).
+    """
+
+    persist_dir: str = "./data/graph"
+    max_hops: int = 2
+    fusion_alpha: float = 0.6
+    rrf_k: int = 60
+
+
+@dataclass
 class AppConfig:
     """Top-level application configuration aggregating all sub-module configs."""
 
@@ -152,6 +170,7 @@ class AppConfig:
     # can be omitted entirely from the YAML file and still produce a valid
     # AppConfig.  All other sections are required.
     vectorstore: VectorStoreConfig = field(default_factory=VectorStoreConfig)
+    graph: GraphConfig = field(default_factory=GraphConfig)
 
 
 # ── Configuration loading utilities ─────────────────────────────
@@ -238,4 +257,5 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         llm=_dict_to_dataclass(LLMConfig, raw.get("llm", {})),
         reranker=_dict_to_dataclass(RerankerConfig, raw.get("reranker", {})),
         retrieval=_dict_to_dataclass(RetrievalConfig, raw.get("retrieval", {})),
+        graph=_dict_to_dataclass(GraphConfig, raw.get("graph", {})),
     )

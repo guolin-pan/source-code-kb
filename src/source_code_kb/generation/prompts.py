@@ -290,6 +290,47 @@ MULTI_ANGLE_QUERY_PROMPT = ChatPromptTemplate.from_messages([
     ("human", "{query}"),
 ])
 
+# ── Multi-angle query + entity extraction (for Graph-enhanced retrieval) ──
+#
+# Same multi-angle strategy as MULTI_ANGLE_QUERY_PROMPT, but the LLM also
+# extracts structured code entities that can be used directly for knowledge
+# graph traversal.  This dramatically improves graph hit rates because:
+#   - Natural language questions ("how is a device registered on the bus?")
+#     rarely contain exact symbol names for regex extraction.
+#   - The LLM can *infer* likely symbol/component/file names from context,
+#     bridging the gap between human language and code identifiers.
+#
+# Output format: JSON with two top-level keys:
+#   - "queries": list of 4-6 retrieval query strings (same as before)
+#   - "entities": {"symbols": [...], "files": [...], "components": [...]}
+MULTI_ANGLE_QUERY_WITH_ENTITIES_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are a source code retrieval query expansion assistant. Given a user question (in any language), "
+        "produce a JSON object with two keys:\n\n"
+        '1. "queries": An array of 4-6 **English** retrieval queries from different angles:\n'
+        "   - Original keywords (direct English translation)\n"
+        "   - Function/symbol names (extract or infer relevant identifiers)\n"
+        "   - File paths (infer likely source files)\n"
+        "   - Call chains / data flow\n"
+        "   - Component / subsystem (broader architectural context)\n"
+        "   - Tags and domain identifiers\n\n"
+        '2. "entities": An object with code entities extracted or inferred from the question:\n'
+        '   - "symbols": Array of function names, class names, macros, struct names, global variables '
+        "(include both explicitly mentioned AND reasonably inferred ones)\n"
+        '   - "files": Array of likely source file paths (e.g., "base/bus.c", "include/udrv/driver.h")\n'
+        '   - "components": Array of component/subsystem names (e.g., "bus", "driver", "alarm-manager")\n\n'
+        "Rules:\n"
+        "- Output ONLY valid JSON, no markdown fences, no explanation.\n"
+        "- ALL queries MUST be in English.\n"
+        "- Preserve technical terms exactly (function names, file names, error codes).\n"
+        "- For entities, be generous: include plausible inferred names even if uncertain.\n"
+        "- If no entities can be inferred for a category, use an empty array [].\n"
+        "- Each query should be concise and suitable for vector similarity search.",
+    ),
+    ("human", "{query}"),
+])
+
 # ── Chunk Evaluation Prompt (R3) ────────────────────────────────
 
 # R3 feature: Chunk-level relevance evaluation.

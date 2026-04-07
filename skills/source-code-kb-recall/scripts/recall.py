@@ -74,7 +74,11 @@ def _build_result(query: str, resp: dict) -> dict:
             "score": r.get("score", 0.0),
             "metadata": meta,
         })
-    return {"query": query, "total": resp.get("total", 0), "chunks": chunks}
+    result: dict = {"query": query, "total": resp.get("total", 0), "chunks": chunks}
+    graph_stats = resp.get("graph_stats")
+    if graph_stats:
+        result["graph_stats"] = graph_stats
+    return result
 
 
 def _build_hierarchical_result(query: str, resp: dict) -> dict:
@@ -96,6 +100,18 @@ def _build_hierarchical_result(query: str, resp: dict) -> dict:
 
 
 # ── Search commands ─────────────────────────────────────────────
+
+
+def _build_entities(args: argparse.Namespace) -> dict | None:
+    """Build an entities dict from CLI args. Returns None if no entities set."""
+    e: dict = {}
+    if args.symbol:
+        e["symbols"] = args.symbol
+    if args.file_entity:
+        e["files"] = args.file_entity
+    if args.component_entity:
+        e["components"] = args.component_entity
+    return e if e else None
 
 
 def _build_filter(args: argparse.Namespace) -> dict | None:
@@ -128,6 +144,7 @@ def cmd_search(args: argparse.Namespace) -> None:
 
     output_path = Path(args.output)
     search_filter = _build_filter(args)
+    entities = _build_entities(args)
     results: list[dict] = []
 
     for q in queries:
@@ -168,6 +185,8 @@ def cmd_search(args: argparse.Namespace) -> None:
                 }
             if search_filter:
                 body["filter"] = search_filter
+            if entities:
+                body["entities"] = entities
 
             resp = api_post("/api/v1/search", body)
             if resp is None:
@@ -205,6 +224,15 @@ def main() -> None:
                         help="Number of results per query (default: 10)")
     parser.add_argument("--reranker", action="store_true", default=False,
                         help="Enable cross-encoder reranking")
+
+    # Graph entity options (for knowledge-graph enhanced retrieval)
+    ent = parser.add_argument_group("graph entities")
+    ent.add_argument("--symbol", action="append", metavar="NAME",
+                     help="Symbol name for graph lookup (repeatable)")
+    ent.add_argument("--file-entity", action="append", metavar="PATH",
+                     help="Source file path for graph lookup (repeatable)")
+    ent.add_argument("--component-entity", action="append", metavar="NAME",
+                     help="Component/subsystem name for graph lookup (repeatable)")
 
     # Filter options
     filters = parser.add_argument_group("filters")

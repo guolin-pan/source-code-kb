@@ -31,9 +31,18 @@ from source_code_kb.generation.prompts import (
     DECOMPOSE_PROMPT,
     SYNTHESIZE_PROMPT,
 )
-from source_code_kb.retrieval.query_rewriter import create_llm, generate_multi_angle_queries, rewrite_query
+from source_code_kb.retrieval.query_rewriter import (
+    create_llm,
+    generate_multi_angle_queries,
+    generate_multi_angle_queries_with_entities,
+    rewrite_query,
+)
 from source_code_kb.retrieval.reranker import rerank
 from source_code_kb.retrieval.retriever import HybridRetriever
+
+# Type alias: either HybridRetriever or HybridFusionRetriever — both expose
+# the same .search(query, top_k=..., search_filter=...) interface.
+RetrieverLike = Any
 
 
 # --- Factory function pattern ---
@@ -87,24 +96,38 @@ def make_rewrite_node(config: AppConfig):
         # (e.g., synonym-based, concept-focused, example-seeking).  This
         # increases recall because a single phrasing may miss relevant
         # documents that use different terminology.
-        queries = generate_multi_angle_queries(state["question"], config)
+        # Also extracts code entities (symbols, files, components) for graph retrieval.
+        rewrite_result = generate_multi_angle_queries_with_entities(state["question"], config)
+        queries = rewrite_result.queries
 
         # If multi-angle generation fails (e.g., LLM error or empty output),
         # fall back to the original question so retrieval can still proceed.
         if not queries:
             queries = [state["question"]]
 
+        entities = {
+            "symbols": rewrite_result.symbols,
+            "files": rewrite_result.files,
+            "components": rewrite_result.components,
+        }
+
         # Preview the first 5 queries in the status for user visibility.
         query_preview = "  |  ".join(queries[:5])
+        entity_count = len(rewrite_result.symbols) + len(rewrite_result.files) + len(rewrite_result.components)
+        entity_hint = f"  |  Entities: [cyan]{entity_count}[/cyan]" if entity_count else ""
         return {
             "rewritten_queries": queries,
-            "_status": f"Generated [cyan]{len(queries)}[/cyan] multi-angle queries:\n         {query_preview}",
+            "extracted_entities": entities,
+            "_status": (
+                f"Generated [cyan]{len(queries)}[/cyan] multi-angle queries{entity_hint}:\n"
+                f"         {query_preview}"
+            ),
         }
 
     return rewrite
 
 
-def make_retrieve_node(config: AppConfig, retriever: HybridRetriever):
+def make_retrieve_node(config: AppConfig, retriever: RetrieverLike):
     """Create the retrieval node.
 
     Executes vector search for all rewritten queries, merging and deduplicating results.
@@ -115,16 +138,14 @@ def make_retrieve_node(config: AppConfig, retriever: HybridRetriever):
         # Fall back to the original question when rewritten_queries is empty
         # (e.g., on the first pass before rewrite runs, or if rewrite failed).
         queries = state.get("rewritten_queries") or [state["question"]]
+        entities = state.get("extracted_entities")
         all_chunks: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
 
-        # Execute a vector search for each query variant, then merge results.
-        # Deduplication by doc_id prevents the same chunk from appearing
-        # multiple times when different query phrasings retrieve overlapping
-        # documents.  When no explicit "id" exists in metadata, the first 50
-        # characters of content serve as a rough dedup key.
+        # Execute a search for each query variant, passing LLM-extracted
+        # entities so the graph retriever can use them for BFS traversal.
         for query in queries:
-            results = retriever.search(query)
+            results = retriever.search(query, entities=entities)
             for r in results:
                 doc_id = r.metadata.get("id", r.content[:50])
                 if doc_id not in seen_ids:
@@ -141,9 +162,19 @@ def make_retrieve_node(config: AppConfig, retriever: HybridRetriever):
         # Show only the top-5 topics, sorted by frequency descending.
         topic_summary = ", ".join(f"{t}({n})" for t, n in sorted(topics.items(), key=lambda x: -x[1])[:5])
 
+        # Build optional graph contribution suffix when using fusion retriever.
+        graph_hint = ""
+        _stats = getattr(retriever, "last_search_stats", None)
+        if _stats is not None:
+            from source_code_kb.retrieval.fusion import graph_stats_summary
+            graph_hint = graph_stats_summary(_stats)
+
         return {
             "retrieved_chunks": all_chunks,
-            "_status": f"Retrieved [cyan]{len(all_chunks)}[/cyan] chunks from {len(queries)} queries  |  Topics: {topic_summary}",
+            "_status": (
+                f"Retrieved [cyan]{len(all_chunks)}[/cyan] chunks from {len(queries)} queries"
+                f"  |  Topics: {topic_summary}{graph_hint}"
+            ),
         }
 
     return retrieve
@@ -335,7 +366,7 @@ def make_decompose_node(config: AppConfig):
     return decompose
 
 
-def make_sub_retrieve_node(config: AppConfig, retriever: HybridRetriever):
+def make_sub_retrieve_node(config: AppConfig, retriever: RetrieverLike):
     """Create the sub-question retrieval and answering node.
 
     For each sub-question, performs: retrieval → re-ranking → answer generation.
@@ -426,7 +457,7 @@ def make_synthesize_node(config: AppConfig, on_token=None):
     return synthesize
 
 
-def make_compare_node(config: AppConfig, retriever: HybridRetriever, on_token=None):
+def make_compare_node(config: AppConfig, retriever: RetrieverLike, on_token=None):
     """Create the comparative analysis node.
 
     Retrieves more candidate documents (top_k=15), re-ranks them (top_n=10),

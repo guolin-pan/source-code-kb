@@ -28,6 +28,7 @@ from source_code_kb.retrieval.retriever import (
     HybridRetriever,
     SearchFilter,
 )
+from source_code_kb.retrieval.factory import create_retriever
 from source_code_kb.server.schemas import (
     CollectionInfo,
     CollectionStatsResponse,
@@ -75,9 +76,10 @@ def _get_retriever(collection_name: str) -> HybridRetriever:
         collection = create_vectorstore(config, collection_name=collection_name)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Collection not found: {e}") from e
-    # Wrap the vectorstore in a HybridRetriever which combines vector
-    # similarity search with metadata filtering logic.
-    return HybridRetriever(collection, config)
+    # Wrap the vectorstore in a retriever.  create_retriever returns a
+    # HybridFusionRetriever (vector + graph RRF) when a persisted graph
+    # exists, otherwise a plain HybridRetriever.
+    return create_retriever(collection, config)
 
 
 # ── Search Endpoints ────────────────────────────────────────────
@@ -111,10 +113,20 @@ async def search(req: SearchRequest):
             component=req.filter.component,
         )
 
+    # Convert entities schema to a plain dict for the retriever interface.
+    entities = None
+    if req.entities:
+        entities = {
+            "symbols": req.entities.symbols,
+            "files": req.entities.files,
+            "components": req.entities.components,
+        }
+
     results = retriever.search(
         query=req.query,
         top_k=req.top_k,
         search_filter=search_filter,
+        entities=entities,
     )
 
     # Optional reranking pass: when enabled, a cross-encoder model re-scores
@@ -129,9 +141,17 @@ async def search(req: SearchRequest):
             top_n=req.rerank_top_n,  # None falls back to config default
         )
 
+    # Capture graph contribution stats when using the fusion retriever.
+    raw_stats = getattr(retriever, "last_search_stats", None)
+    graph_stats = None
+    if raw_stats:
+        from source_code_kb.server.schemas import GraphStatsSchema
+        graph_stats = GraphStatsSchema(**raw_stats)
+
     return SearchResponse(
         results=[SearchResultSchema(**r.to_dict()) for r in results],
         total=len(results),
+        graph_stats=graph_stats,
     )
 
 

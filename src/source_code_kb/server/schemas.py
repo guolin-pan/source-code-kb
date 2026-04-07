@@ -39,6 +39,19 @@ class SearchFilterSchema(BaseModel):
     component: str | None = None        # Filter by component/subsystem
 
 
+class EntitiesSchema(BaseModel):
+    """Pre-extracted code entities for graph-enhanced retrieval.
+
+    When provided, these entities are passed to the knowledge-graph retriever
+    to improve hit rates — especially for natural-language queries that don't
+    contain literal symbol names.
+    """
+
+    symbols: list[str] = Field(default_factory=list)     # Function/class/macro names
+    files: list[str] = Field(default_factory=list)       # Source file paths
+    components: list[str] = Field(default_factory=list)  # Component/subsystem names
+
+
 class SearchRequest(BaseModel):
     """POST /api/v1/search request body."""
 
@@ -48,6 +61,7 @@ class SearchRequest(BaseModel):
     filter: SearchFilterSchema | None = None
     use_reranker: bool = False          # Apply cross-encoder reranking (default: off)
     rerank_top_n: int | None = None     # Results to keep after reranking (uses config default if None)
+    entities: EntitiesSchema | None = None  # Pre-extracted code entities for graph retrieval
 
 
 class HierarchicalSearchRequest(BaseModel):
@@ -70,11 +84,25 @@ class SearchResultSchema(BaseModel):
     score: float                       # Relevance score
 
 
+class GraphStatsSchema(BaseModel):
+    """Graph contribution statistics for a search query."""
+
+    vector_hits: int = 0
+    graph_hits_raw: int = 0
+    graph_hits_filtered: int = 0
+    merged_total: int = 0
+    graph_contributed: int = 0
+    graph_only: int = 0
+    graph_boosted: int = 0
+    rank_improvements: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class SearchResponse(BaseModel):
     """POST /api/v1/search response body."""
 
     results: list[SearchResultSchema]  # Search results list
     total: int                         # Total number of results
+    graph_stats: GraphStatsSchema | None = None  # Graph contribution (present when fusion retriever is used)
 
 
 class HierarchicalSearchResponse(BaseModel):
